@@ -9,52 +9,308 @@ import json
 import os
 from pathlib import Path
 
-from mcp_server.schemas import FitScoreResult, JobRequirements, ResumeProfile
+from pydantic import BaseModel, Field
+
+from mcp_server.schemas import (
+    FitScoreResult,
+    JobRequirements,
+    RemotePreference,
+    ResumeProfile,
+    SeniorityLevel,
+    Verdict,
+)
+from mcp_server.tools._llm import get_groq_llm
 
 DEFAULT_RESUME_PATH = Path(
     os.environ.get("RESUME_PROFILE_PATH", "data/resume_profile.json")
 )
 
+# Пороги verdict по итоговому score. Вынесены в константы (не хардкодить
+# в нескольких местах), см. TODO в SPEC.md: score >= GO_THRESHOLD -> go,
+# MAYBE_THRESHOLD..GO_THRESHOLD-1 -> maybe, иначе -> no_go.
+GO_THRESHOLD = 70
+MAYBE_THRESHOLD = 50
+
+# Верхняя граница score, когда сработал хотя бы один жёсткий фильтр —
+# гарантирует no_go независимо от того, что насчитал LLM поверх.
+HARD_FAIL_SCORE_CAP = MAYBE_THRESHOLD - 1
+
+_SENIORITY_ORDER = {
+    SeniorityLevel.junior: 0,
+    SeniorityLevel.mid: 1,
+    SeniorityLevel.senior: 2,
+    SeniorityLevel.lead: 3,
+}
+
+# Фразы, по которым в сыром тексте вакансии эвристически ищем сигнал
+# "спонсорство визы/рабочего разрешения не предоставляется". Грубая эвристика
+# для MVP: сопоставляется только с резюме, где work_authorization явно
+# говорит о потребности в спонсорстве.
+_NO_SPONSORSHIP_PHRASES = (
+    "no sponsorship",
+    "not sponsor",
+    "not able to sponsor",
+    "unable to sponsor",
+    "no visa sponsorship",
+    "must have work authorization",
+    "must be authorized to work",
+)
+
 
 def load_resume_profile(profile_id: str | None = None) -> ResumeProfile:
-    """Читает профиль резюме из JSON.
+    """Читает профиль резюме из JSON и валидирует его через ResumeProfile.
 
     Для MVP `profile_id` игнорируется — один пользователь, один файл
     (data/resume_profile.json). Параметр оставлен в сигнатуре на случай,
     если понадобится несколько профилей под разные типы ролей.
-
-    TODO (день 2): дописать реальное чтение + валидацию через ResumeProfile.
-    Сейчас — заглушка, чтобы MCP-сервер поднимался и tool был виден клиенту.
     """
-    raise NotImplementedError(
-        "load_resume_profile не реализован — см. TODO в mcp_server/tools/scoring.py.\n"
-        f"Файл профиля должен лежать в {DEFAULT_RESUME_PATH}"
-    )
-
-
-def compute_fit_score(
-    job: JobRequirements, resume: ResumeProfile
-) -> FitScoreResult:
-    """Считает fit-score.
-
-    TODO (день 2), по SPEC.md:
-      1. Детерминированная часть: пересечение job.required_stack и
-         {s.name for s in resume.skills} → matched_skills / missing_skills.
-         Плюс жёсткие фильтры: seniority_level, remote_ok vs remote_preference,
-         work_authorization vs location — это то, что не должно решать LLM,
-         это факты, а не суждение.
-      2. LLM-часть: рассуждение по неявным сигналам (nice_to_have, формулировки,
-         red flags в тексте вакансии) поверх результатов шага 1 — здесь и
-         рождается explanation и итоговый score/verdict.
-      3. verdict по порогу: score >= 70 -> go, 50-69 -> maybe, иначе no_go
-         (порог вынести в конфиг, не хардкодить в нескольких местах).
-    """
-    raise NotImplementedError(
-        "compute_fit_score не реализован — см. TODO в mcp_server/tools/scoring.py"
-    )
+    data = _load_resume_json()
+    return ResumeProfile.model_validate(data)
 
 
 def _load_resume_json(path: Path = DEFAULT_RESUME_PATH) -> dict:
-    """Вспомогательная функция для будущей реализации load_resume_profile."""
+    """Вспомогательная функция для load_resume_profile."""
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _estimate_candidate_seniority(resume: ResumeProfile) -> SeniorityLevel:
+    """Грубая оценка уровня кандидата по суммарному опыту.
+
+    Это эвристика для детерминированного hard-filter'а, не замена
+    полноценной seniority-модели — профиль не хранит явный seniority level.
+    """
+    years = resume.years_experience_total
+    if years < 2:
+        return SeniorityLevel.junior
+    if years < 5:
+        return SeniorityLevel.mid
+    if years < 8:
+        return SeniorityLevel.senior
+    return SeniorityLevel.lead
+
+
+def _language_base(lang: str) -> str:
+    """Базовое название языка без уровня владения, напр. "English (C1)" -> "english"."""
+    return lang.split("(")[0].strip().lower()
+
+
+class _DeterministicMatch(BaseModel):
+    matched_skills: list[str]
+    missing_skills: list[str]
+    hard_fail_reasons: list[str]
+    stack_score: float | None = Field(
+        description="Доля required_stack, покрытая резюме (0..1), None если required_stack пуст"
+    )
+
+
+def _deterministic_match(job: JobRequirements, resume: ResumeProfile) -> _DeterministicMatch:
+    """Детерминированная часть скоринга: keyword-матч стека + жёсткие фильтры.
+
+    Жёсткие фильтры (seniority/remote/location/язык/work_authorization) —
+    это факты, а не суждение, поэтому решаются здесь, а не отдаются LLM
+    на усмотрение.
+    """
+    resume_skill_names = {s.name.strip().lower() for s in resume.skills}
+    required = [s.strip() for s in job.required_stack if s.strip()]
+
+    matched = [s for s in required if s.lower() in resume_skill_names]
+    missing = [s for s in required if s.lower() not in resume_skill_names]
+    stack_score = len(matched) / len(required) if required else None
+
+    hard_fail_reasons: list[str] = []
+
+    candidate_level = _estimate_candidate_seniority(resume)
+    if _SENIORITY_ORDER[job.seniority_level] - _SENIORITY_ORDER[candidate_level] >= 2:
+        hard_fail_reasons.append(
+            f"seniority gap: вакансия требует {job.seniority_level.value}, "
+            f"профиль ближе к {candidate_level.value} "
+            f"(~{resume.years_experience_total:g} лет опыта)"
+        )
+
+    if resume.remote_preference == RemotePreference.remote_only and not job.remote_ok:
+        hard_fail_reasons.append(
+            "remote mismatch: профиль ищет только remote, вакансия remote не предлагает"
+        )
+
+    if not job.remote_ok and job.location and resume.preferred_location:
+        location_lower = job.location.lower()
+        if not any(
+            loc.lower() in location_lower or location_lower in loc.lower()
+            for loc in resume.preferred_location
+        ):
+            hard_fail_reasons.append(
+                f"location mismatch: вакансия в {job.location!r}, "
+                f"профиль предпочитает {resume.preferred_location}"
+            )
+
+    if job.language_requirements and resume.languages:
+        # Сравниваем только базовое название языка (до скобки с уровнем),
+        # не весь текст: "English (C1)" и "English (C1 or above)" — один и
+        # тот же язык, а проверка уровня владения — не факт, а суждение,
+        # это отдаётся LLM-шагу, а не хардкодится здесь.
+        resume_langs_base = {_language_base(lang) for lang in resume.languages}
+        if not any(
+            _language_base(req) in resume_langs_base for req in job.language_requirements
+        ):
+            hard_fail_reasons.append(
+                f"language mismatch: вакансия требует {job.language_requirements}, "
+                f"профиль указывает {resume.languages}"
+            )
+
+    needs_sponsorship = "sponsor" in resume.work_authorization.lower() and (
+        "no sponsorship needed" not in resume.work_authorization.lower()
+    )
+    if needs_sponsorship and any(
+        phrase in job.raw_text.lower() for phrase in _NO_SPONSORSHIP_PHRASES
+    ):
+        hard_fail_reasons.append(
+            "work_authorization mismatch: вакансия явно не спонсирует визу/разрешение, "
+            f"профиль указывает {resume.work_authorization!r}"
+        )
+
+    return _DeterministicMatch(
+        matched_skills=matched,
+        missing_skills=missing,
+        hard_fail_reasons=hard_fail_reasons,
+        stack_score=stack_score,
+    )
+
+
+class _LLMScoreAssessment(BaseModel):
+    score: int = Field(ge=0, le=100, description="Итоговый fit score 0-100")
+    explanation: str = Field(description="2-4 предложения объяснения score")
+    confidence: float = Field(
+        ge=0.0, le=1.0, description="Насколько уверенно можно судить по доступным данным"
+    )
+
+
+_SCORE_SYSTEM_PROMPT = """Ты помогаешь оценить, насколько кандидат подходит под вакансию.
+
+Тебе уже дан результат детерминированного анализа: пересечение обязательного
+стека вакансии с навыками кандидата, и список сработавших жёстких фильтров
+(seniority/remote/location/язык/work authorization — если этот список не пуст,
+речь идёт о доказанном несоответствии, а не предположении).
+
+Твоя задача — поверх этих фактов:
+- учесть nice-to-have стек (плюс, но не обязательный),
+- учесть неявные сигналы из текста вакансии (culture fit, формулировки,
+  red flags вроде "rockstar ninja", нереалистичные требования, неясные
+  обязанности),
+- дать итоговый score 0-100 и объяснение на 2-4 предложения.
+
+Правила:
+- Если hard_fail_reasons не пуст — это дисквалифицирующие факторы, score
+  должен быть низким (не выше 40), независимо от остального совпадения.
+- Если required_stack не удалось извлечь (stack_score = null) — снижай
+  confidence, не выдумывай уверенность на пустом месте.
+- score должен быть согласован с детерминированным stack_score как базовой
+  линией: отклоняйся от неё только когда для этого есть явная причина
+  (сильное покрытие nice-to-have, явные red flags в тексте и т.п.), и
+  объясняй это отклонение в explanation.
+"""
+
+
+def compute_fit_score(job: JobRequirements, resume: ResumeProfile) -> FitScoreResult:
+    """Считает fit-score.
+
+    1. Детерминированная часть (_deterministic_match): пересечение
+       required_stack и навыков резюме + жёсткие фильтры (факты, не суждение).
+    2. LLM-часть поверх шага 1: рассуждение по неявным сигналам, формирует
+       explanation и предлагает итоговый score/confidence.
+    3. verdict считается по порогу (GO_THRESHOLD/MAYBE_THRESHOLD) от итогового
+       score, а не запрашивается у LLM напрямую — так порог остаётся
+       единственным местом, где решается go/maybe/no_go.
+    """
+    det = _deterministic_match(job, resume)
+
+    llm_result = _run_llm_assessment(job, resume, det)
+
+    score = llm_result.score
+    if det.hard_fail_reasons:
+        score = min(score, HARD_FAIL_SCORE_CAP)
+
+    verdict = _verdict_from_score(score)
+
+    return FitScoreResult(
+        score=score,
+        verdict=verdict,
+        matched_skills=det.matched_skills,
+        missing_skills=det.missing_skills,
+        explanation=llm_result.explanation,
+        confidence=llm_result.confidence,
+    )
+
+
+def _run_llm_assessment(
+    job: JobRequirements, resume: ResumeProfile, det: _DeterministicMatch
+) -> _LLMScoreAssessment:
+    llm = get_groq_llm()
+    structured_llm = llm.with_structured_output(_LLMScoreAssessment)
+
+    stack_score_pct = (
+        f"{det.stack_score * 100:.0f}%" if det.stack_score is not None else "неизвестно (required_stack пуст)"
+    )
+    human_prompt = f"""Вакансия:
+title: {job.title}
+company: {job.company}
+seniority_level: {job.seniority_level.value}
+required_stack: {job.required_stack}
+nice_to_have_stack: {job.nice_to_have_stack}
+location: {job.location}
+remote_ok: {job.remote_ok}
+language_requirements: {job.language_requirements}
+salary_range: {job.salary_range}
+
+Текст вакансии целиком (для оценки формулировок/red flags):
+{job.raw_text}
+
+Профиль кандидата:
+years_experience_total: {resume.years_experience_total}
+skills: {[(s.name, s.years, s.proficiency.value) for s in resume.skills]}
+languages: {resume.languages}
+remote_preference: {resume.remote_preference.value}
+preferred_location: {resume.preferred_location}
+work_authorization: {resume.work_authorization}
+past_roles: {resume.past_roles}
+
+Детерминированный анализ (уже посчитан, не пересчитывай):
+matched_skills: {det.matched_skills}
+missing_skills: {det.missing_skills}
+stack_score: {stack_score_pct}
+hard_fail_reasons: {det.hard_fail_reasons}
+"""
+
+    try:
+        result = structured_llm.invoke(
+            [
+                ("system", _SCORE_SYSTEM_PROMPT),
+                ("human", human_prompt),
+            ]
+        )
+    except Exception:
+        result = None
+
+    if isinstance(result, _LLMScoreAssessment):
+        return result
+
+    # LLM недоступен/не смог ответить структурированно — fallback на чистый
+    # детерминированный score, чтобы tool не падал (тот же принцип, что и
+    # в extract_job_requirements: честный частичный результат лучше ошибки).
+    fallback_score = round(det.stack_score * 100) if det.stack_score is not None else MAYBE_THRESHOLD
+    return _LLMScoreAssessment(
+        score=fallback_score,
+        explanation=(
+            "LLM-оценка недоступна (ошибка вызова Groq) — score посчитан только по "
+            "детерминированному пересечению required_stack с навыками профиля."
+        ),
+        confidence=0.3,
+    )
+
+
+def _verdict_from_score(score: int) -> Verdict:
+    if score >= GO_THRESHOLD:
+        return Verdict.go
+    if score >= MAYBE_THRESHOLD:
+        return Verdict.maybe
+    return Verdict.no_go
