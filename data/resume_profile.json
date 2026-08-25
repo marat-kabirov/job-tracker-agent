@@ -1,0 +1,20 @@
+{
+  "skills": [
+    { "name": "Python", "years": 0, "proficiency": "mid" },
+    { "name": "FastAPI", "years": 0, "proficiency": "mid" },
+    { "name": "Django", "years": 0, "proficiency": "mid" },
+    { "name": "SQLAlchemy", "years": 0, "proficiency": "mid" },
+    { "name": "TypeScript", "years": 0, "proficiency": "mid" },
+    { "name": "React", "years": 0, "proficiency": "mid" },
+    { "name": "LangChain", "years": 0, "proficiency": "mid" },
+    { "name": "LangGraph", "years": 0, "proficiency": "mid" },
+    { "name": "RAG pipelines", "years": 0, "proficiency": "mid" },
+    { "name": "FAISS / vector search", "years": 0, "proficiency": "mid" }
+  ],
+  "years_experience_total": 0,
+  "languages": ["TODO: например \"English (C1)\", \"Russian (native)\""],
+  "work_authorization": "TODO: например \"EU work permit required\" или \"no sponsorship needed\"",
+  "preferred_location": ["TODO: например \"Berlin\", \"Remote EU\""],
+  "remote_preference": "hybrid_ok",
+  "past_roles": ["TODO: например \"Backend Engineer @ Company\""]
+}
