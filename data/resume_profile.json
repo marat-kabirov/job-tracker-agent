@@ -1,20 +1,23 @@
 {
   "skills": [
-    { "name": "Python", "years": 0, "proficiency": "mid" },
-    { "name": "FastAPI", "years": 0, "proficiency": "mid" },
-    { "name": "Django", "years": 0, "proficiency": "mid" },
-    { "name": "SQLAlchemy", "years": 0, "proficiency": "mid" },
-    { "name": "TypeScript", "years": 0, "proficiency": "mid" },
-    { "name": "React", "years": 0, "proficiency": "mid" },
-    { "name": "LangChain", "years": 0, "proficiency": "mid" },
-    { "name": "LangGraph", "years": 0, "proficiency": "mid" },
-    { "name": "RAG pipelines", "years": 0, "proficiency": "mid" },
-    { "name": "FAISS / vector search", "years": 0, "proficiency": "mid" }
+    { "name": "Python", "years": 1.5, "proficiency": "mid" },
+    { "name": "FastAPI", "years": 0.5, "proficiency": "junior" },
+    { "name": "Django", "years": 0.3, "proficiency": "junior" },
+    { "name": "SQLAlchemy", "years": 0.5, "proficiency": "junior" },
+    { "name": "TypeScript", "years": 1.0, "proficiency": "mid" },
+    { "name": "React", "years": 1.0, "proficiency": "mid" },
+    { "name": "LangChain", "years": 0.3, "proficiency": "junior" },
+    { "name": "LangGraph", "years": 0.2, "proficiency": "junior" },
+    { "name": "RAG pipelines", "years": 0.3, "proficiency": "junior" },
+    { "name": "FAISS / vector search", "years": 0.3, "proficiency": "junior" }
   ],
-  "years_experience_total": 0,
-  "languages": ["TODO: например \"English (C1)\", \"Russian (native)\""],
-  "work_authorization": "TODO: например \"EU work permit required\" или \"no sponsorship needed\"",
-  "preferred_location": ["TODO: например \"Berlin\", \"Remote EU\""],
+  "years_experience_total": 0.5,
+  "languages": ["English (C1, professional)", "German (B1)", "Russian (native)"],
+  "work_authorization": "Student residence permit (Germany) — requires Zweckwechsel to switch to full-time work purpose; not an unrestricted work permit; some roles flag sponsorship as needed",
+  "preferred_location": ["Chemnitz", "Berlin", "Munich", "Remote (Germany)"],
   "remote_preference": "hybrid_ok",
-  "past_roles": ["TODO: например \"Backend Engineer @ Company\""]
+  "past_roles": [
+    "Backend Developer (Working Student) @ BotLabX (Oct 2025 – Feb 2026)",
+    "M.Sc. Web Engineering student @ TU Chemnitz (expected Oct 2026)"
+  ]
 }

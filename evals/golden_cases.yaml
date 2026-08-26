@@ -1,15 +1,108 @@
 # Golden-кейсы для eval (день 4 по SPEC.md).
 #
-# Идея: не выдумывать вакансии, а взять реальные, которые уже разбирались
-# вручную (GeneralMind, Manex AI, Lucid Labs, WaveSix) плюс пару явных
-# mismatch-кейсов — чтобы проверить, что агент не завышает score из вежливости.
+# Реальные вакансии из джоб-серча + реальные ручные оценки (не выдуманные).
+# expected_score_range — ориентир по порогам из SPEC.md (go >= 70, maybe 50-69,
+# no_go < 50), сделан с запасом, т.к. точные пороги живут в GO_THRESHOLD/
+# MAYBE_THRESHOLD в mcp_server/tools/scoring.py и score зависит от live LLM.
 #
-# Формат одного кейса:
-# - id: короткий идентификатор
-#   job_text: полный текст вакансии (вставить как есть)
-#   expected_verdict: go | maybe | no_go   # твоя ручная оценка
-#   expected_score_range: [min, max]        # допустимый диапазон 0-100
-#   notes: почему именно такая оценка (для себя, при разборе расхождений)
+# Это только 4 кейса, все реальные — это ок для первого прогона дня 4, но
+# для полноценного eval-набора (5-10 по плану) стоит когда-нибудь добавить
+# 1-2 explicit no-match вакансии (например senior-only роль или совсем другой
+# стек) — не выдуманные, а тоже реально просмотренные и отклонённые.
 
-cases: []
-# TODO: заполнить реальными вакансиями перед днём 4.
+cases:
+  - id: generalmind
+    job_text: |
+      Value Delivery Intern - Automations, Berlin — GeneralMind
+
+      GeneralMind builds AI Systems of Action for complex enterprise workflows. We deploy AI employees that automate messy operational handovers across supply chains processing orders, validating invoices, coordinating suppliers, and handling exceptions directly on top of enterprise systems like SAP or Oracle. Our platform combines AI agents, operational context graphs, and real transaction data to achieve Autopilot-grade automation in real operational environments. We work closely with leading global companies across manufacturing, retail, and logistics to deploy AI into mission-critical workflows.
+
+      About the role: In the Value Delivery team, we take our enterprise customers from first pilot to full production rollout: scoping ERP integrations, running clean handovers between teams, making sure nothing falls through the cracks. A lot of that still runs on manual work today, and that's exactly where you come in. You'll automate how we work internally. Linear workflows, delivery reporting, and small internal tools that give the team back hours every week. You won't be working on our core product. You'll be building the tools that make the team behind it faster and smarter, and you'll use AI daily to build them.
+
+      Tasks: Spot internal processes worth automating (delivery tracking, reporting, customer onboarding workflows) and build the solution yourself. Design, build, and ship small, focused tools and dashboards with Claude Code, Next.js, and Vercel. Work deep inside our project management stack: automate workflows, build integrations, connect data flows between tools. Turn existing scripts and one-off prototypes into robust, reusable tools the whole team can rely on. Work side by side with the Value Delivery team to find where the real leverage is, then go after it. Try new approaches when it makes sense: new AI tooling, new integrations, new ways to cut manual steps out entirely. Bring fresh ideas: keep an eye on what's coming in AI-assisted development so our internal tooling stays ahead.
+
+      What we are looking for: Experience with, or strong curiosity about, Claude Code and AI-assisted development. An automation mindset: you spot a repetitive process and immediately want it gone. An independent, pragmatic way of working: build small, ship fast, iterate. Comfortable with Next.js or similar; you can get something deployed and working without hand-holding. An eye for where the real bottleneck is, and the instinct to get the details right. Genuinely interested in B2B SaaS, AI, and enterprise operations. You're happy being in the office five days a week.
+
+      What you'll get: Real ownership from day one: you'll pick the problems and ship the tools, not just execute someone else's backlog. A front-row seat at an AI startup working with some of the world's biggest companies. Room to grow fast: as we scale, the role grows with you. Work directly with the Value Delivery team and the founders. Short paths, quick decisions. Time and budget to try new AI tools and build the way you think it should be built.
+    expected_verdict: go
+    expected_score_range: [65, 95]
+    notes: >
+      Сильнейший keyword-резонанс за весь поиск — "automation mindset",
+      "without hand-holding" совпадали дословно с формулировками в резюме.
+      Единственный минус: полный офис 5 дней/неделю, но это soft-сигнал,
+      не hard-блокер. В реальности подано 25.08, отказ пришёл через ~1 час —
+      вероятно, решение было принято до подачи (маленький пул, всего 9
+      откликов), а не из-за плохого fit.
+
+  - id: manex_ai
+    job_text: |
+      AI Agent Engineer (f/m/d), Munich — Manex AI
+
+      Who We Are: Manufacturing runs on fragmented data: machines, sensors, and decade-old systems that don't speak to each other. Data sits in departmental silos, knowledge lives in people's heads, and AI can not unfold its potential in point solutions that don't deliver. At Manex AI, we build that missing layer with our platform: It handles manufacturing data at scale, models the factory ontology and builds agentic applications that reason and act across it. We're a small team in Munich, backed by Lightspeed and BlueYard, with engineers from top companies. We ship fast, work close to the shop floor and we don't ship things we're not proud of.
+
+      The role: You'll build our AI agent stack: From the tools, skills, and subagents, plus the MCP infrastructure that connects them. The work spans agent workflows, memory and context management, sandboxed execution, and agent observability - you'll work where your skills count most. You own agentic systems end-to-end and work directly with founders and customers.
+
+      You should apply if you: Have built AI agents or are eager to learn. Bring experience with agent workflows, tools, skills and subagents. Are interested in MCP, context and memory management at scale. Build secure, sandboxed execution environments. Care about evaluation, observability, safety, and reliability. Write maintainable Python or TypeScript.
+
+      Nice to have: MCP servers and clients. Tool design and multi-agent orchestration. Containers, code execution, and sandboxing. Agent evaluation, tracing, observability (e.g., Langfuse) and guardrails. Retrieval, memory, and prompt engineering. LLM APIs, open-source models and proxies (e.g., LiteLLM, OpenRouter).
+
+      What we offer: A cooperative team where you own your work, but never solve hard problems alone. Competitive salary and equity. High trust and ownership from day one. Corporate Wellpass membership, subsidized public transport. Regular offsites with the greatest team - think austrian mountains, lakeside retreats, or european cities. Relocation support, incl. corporate housing offers.
+    expected_verdict: go
+    expected_score_range: [60, 90]
+    notes: >
+      Сильный fit: "have built AI agents or are eager to learn" — открытая
+      формулировка для входа; явно заявлена поддержка ("never solve hard
+      problems alone"), в отличие от токсично-автономных стартапов. MCP —
+      новая область для меня, но заявлена как preferred/nice-to-have,
+      не hard-блокер.
+
+  - id: lucid_labs
+    job_text: |
+      AI Engineer (m/f/d), Remote (Germany) — Lucid Labs
+
+      What this role is about: AI has arrived in the German Mittelstand. The distance between a convincing demo and a system a department trusts every single day is still large — and it gets closed by work that almost nobody does properly: defining what "good" concretely means, building the system toward it, measuring whether it hits, and iterating until it holds. That is what you do: You don't start from zero. You usually get a real starting point, often a golden data set from the department of a German Mittelstand company: real cases, each with the result an experienced expert would deliver. Your job is to build a system that reaches that result reliably, to bring it into people's working day through an interface they can actually use, and to be able to prove that it works.
+
+      Tasks: You typically work on two to three customer projects in parallel. 80% Building: Derive a defensible definition of "correct" from reference data, and build an eval that measures it. Design and build the AI system itself: model and provider choice, context and prompt design, structured outputs, tool calling, agent/workflow logic, retrieval where it earns its place — and deterministic logic where an LLM isn't needed. Do error analysis and iterate deliberately instead of guessing — and demonstrate the improvement. Build guardrails, escalation paths and monitoring, so the system doesn't fail loudly and confidently. Build the production interface that goes with it: review screens, approvals, human-in-the-loop — in Next.js and TypeScript, not a throwaway prototype. Roll the solution out and keep it running + improve it as AI advances. 20% Communication: Capture and pass on your state in a structured way. Explain complex technical matters so that the project lead and colleagues without an AI background can decide on a sound basis. Raise questions, blockers and wrong assumptions early. Occasionally demonstrate or explain a result at the customer yourself.
+
+      Requirements (Important): You have built an AI solution that real users used in production — not just a prototype. You know how to engineer production LLM systems: context and prompt design, model selection, structured outputs, tool calling, failure handling, latency/cost trade-offs. You work eval-driven. You have built a system in which AI agents plan and execute tasks. You build production frontend: React and Next.js, TypeScript. You can ship and operate your own solution: Docker, deployment, logging, cost control. You can explain a complex technical topic clearly. You work in a structured way internally. Coding agents (Claude Code, Cursor) as part of your daily work. English at working level. You can work in Germany full-time. A student visa with a day limit doesn't cover this role. 3+ years of professional experience in delivery projects.
+
+      Highly valuable: German. Experience with a production AI SDK layer (e.g. Vercel AI SDK), streaming architectures, several providers. Evaluation pipelines and feedback loops. Using retrieval where it earns its place. Experience with customers or business departments in the German Mittelstand. Confidence on GDPR and EU hosting questions. Workflow orchestration with n8n or comparable.
+
+      Not required: A computer science degree. Model training, fine-tuning, classical machine learning. MLOps, Kubernetes, data engineering pipelines.
+    expected_verdict: no_go
+    expected_score_range: [0, 35]
+    notes: >
+      Двойной жёсткий блокер: (1) "3+ years of professional experience" —
+      explicit hard requirement, у меня ~5 месяцев формального опыта;
+      (2) "A student visa with a day limit doesn't cover this role" —
+      прямая формулировка, исключающая именно текущий визовый статус.
+      Оба блокера сформулированы в тексте без исключений — хороший тест
+      на то, что hard-filter по work_authorization реально ловит явную
+      формулировку, а не только общие ключевые слова вроде "sponsorship".
+
+  - id: wavesix
+    job_text: |
+      AI & Automation Engineer, Berlin — WaveSix
+
+      What You'll Do: You'll design and ship AI systems and automation workflows that solve real business problems. You know when to reach for an LLM and when a simple rule or lookup table does the job better — and you build accordingly. Experience with data engineering is a meaningful plus: DAGs, ETL pipelines, and agent workflows share the same core challenges around reliability, observability, and failure handling.
+
+      You'll Build: Data pipelines and orchestrated automation workflows. AI pipelines with LLMs, embeddings, and retrieval where they add real value. RAG systems and agents grounded in real company data. Integrations that connect AI outputs to actual business tools and processes.
+
+      What We're Looking For — Core: Python, LLM APIs (OpenAI, Anthropic, etc.), prompt engineering and evaluation. RAG pipelines, embeddings, vector databases. Workflow automation and orchestration — agents, triggers, conditional logic. Strong judgment on when to use AI vs. deterministic logic.
+
+      Big plus: ETL/ELT pipeline design, SQL, data modeling, API integrations. Airflow, Prefect, dbt, BigQuery/Snowflake, cloud (GCP/AWS/Azure).
+
+      Bonus: LangChain/LlamaIndex. n8n/Make/Zapier. Docker.
+
+      You Likely...: build things from scratch and care about reliability, not just demos. have a data engineering or early-stage startup background. move fast, ship often, iterate on results.
+
+      Why WaveSix?: At WaveSix, we're riding the sixth wave of technological innovation, bringing the transformative power of AI to businesses and lives worldwide. Work Your Way: hybrid setup where only results matter. A Culture of Trust. Diversity and Inclusivity. Entrepreneurial Spirit: you're a co-owner of our vision. Shape the Future.
+
+      About Us: WaveSix Labs is a leading German AI Transformation & Product Studio, driving end-to-end AI transformation — from strategy to scalable products. 650+ global executives trained in GenAI, 300+ agents developed and workflows automated, 5,000+ annual productivity hours gained.
+    expected_verdict: go
+    expected_score_range: [65, 95]
+    notes: >
+      Один из сильнейших технических keyword-мэтчей: LLM APIs, RAG,
+      vector DBs, n8n, LangChain — почти всё core+bonus требования
+      покрыты реальным опытом. Уровень не указан явно (не junior/senior
+      barrier), фильтр по компетенциям, а не по годам.
