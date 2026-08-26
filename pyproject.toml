@@ -26,3 +26,8 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["mcp_server*", "agent*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "real_semantic_match: opt out of the autouse _semantic_skill_match mock in test_scoring_deterministic.py to exercise the real Groq call",
+]

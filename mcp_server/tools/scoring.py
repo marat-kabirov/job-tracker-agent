@@ -100,22 +100,147 @@ class _DeterministicMatch(BaseModel):
     missing_skills: list[str]
     hard_fail_reasons: list[str]
     stack_score: float | None = Field(
-        description="Доля required_stack, покрытая резюме (0..1), None если required_stack пуст"
+        description=(
+            "Доля required_stack, покрытая резюме — exact-string матч плюс "
+            "semantic-матч из фазы 2 (см. _semantic_skill_match), 0..1, "
+            "None если required_stack пуст"
+        )
+    )
+    semantic_match_notes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Пояснения по пунктам, закрытым не буквальным совпадением строк, "
+            "а семантическим решением LLM (фаза 2) — прокидываются в explanation, "
+            "чтобы не выглядело так, будто это точное совпадение с резюме"
+        ),
     )
 
 
-def _deterministic_match(job: JobRequirements, resume: ResumeProfile) -> _DeterministicMatch:
-    """Детерминированная часть скоринга: keyword-матч стека + жёсткие фильтры.
+class _SkillSemanticMatch(BaseModel):
+    required_item: str = Field(description="required_stack item из вакансии, как есть")
+    covered: bool = Field(
+        description="Даёт ли резюме кандидата реальную, содержательную основу для этого требования"
+    )
+    matched_skill_name: str | None = Field(
+        default=None,
+        description="Название скилла из резюме, который покрывает required_item (только если covered=True)",
+    )
+    reason: str = Field(description="Короткое (1 предложение) обоснование решения")
 
-    Жёсткие фильтры (seniority/remote/location/язык/work_authorization) —
-    это факты, а не суждение, поэтому решаются здесь, а не отдаются LLM
-    на усмотрение.
+
+class _SemanticMatchResponse(BaseModel):
+    matches: list[_SkillSemanticMatch]
+
+
+_SEMANTIC_MATCH_SYSTEM_PROMPT = """Ты помогаешь понять, покрывает ли резюме кандидата конкретные
+пункты required_stack вакансии — даже если название в резюме и в вакансии не
+совпадает буквально. Пример: вакансия просит "Next.js", в резюме нет пункта
+"Next.js", но есть "React" и "TypeScript" — это разные, но содержательно
+пересекающиеся технологии (Next.js — React-фреймворк), и опыт с React+TS даёт
+реальную базу для Next.js.
+
+Тебе дают список required_stack items, которые НЕ совпали по точному имени
+ни с одним навыком кандидата, и полный список навыков кандидата (с годами
+опыта и уровнем).
+
+Для каждого item верни:
+- covered=True, только если у навыков кандидата есть конкретная, содержательная
+  техническая связь с этим item (тот же базовый стек/протокол/API семейство,
+  на котором построен требуемый инструмент, а не просто "тоже про AI/бэкенд").
+  Если связь слишком слабая или спекулятивная — covered=False. Не выдумывай
+  компетенции, которых нет в данных.
+- matched_skill_name — конкретное имя скилла кандидата, который покрывает
+  item (только если covered=True, иначе null).
+- reason — одно короткое предложение с обоснованием (в обе стороны: почему
+  покрыто или почему нет).
+
+Верни ровно один элемент matches на каждый входной required_stack item,
+required_item в ответе — дословно как во входном списке.
+"""
+
+
+def _semantic_skill_match(
+    unmatched_required: list[str], resume: ResumeProfile
+) -> list[_SkillSemanticMatch]:
+    """Фаза 2 skill-матчинга: LLM решает то, что не решается точным совпадением строк.
+
+    Тот же принцип, что уже используется в _run_llm_assessment для
+    explanation/score — здесь применён к самому skill-матчингу. Если LLM
+    недоступен или не смог ответить структурированно — возвращаем пустой
+    список (все item'ы остаются missing, а не ложно "покрытыми"): в этом
+    шаге безопаснее деградировать в сторону no-match, а не угадывать.
+    """
+    if not unmatched_required or not resume.skills:
+        return []
+
+    llm = get_groq_llm()
+    structured_llm = llm.with_structured_output(_SemanticMatchResponse)
+
+    human_prompt = f"""required_stack items, не совпавшие по точному имени:
+{unmatched_required}
+
+Навыки кандидата (имя, годы опыта, уровень):
+{[(s.name, s.years, s.proficiency.value) for s in resume.skills]}
+"""
+
+    try:
+        result = structured_llm.invoke(
+            [
+                ("system", _SEMANTIC_MATCH_SYSTEM_PROMPT),
+                ("human", human_prompt),
+            ]
+        )
+    except Exception:
+        return []
+
+    if not isinstance(result, _SemanticMatchResponse):
+        return []
+
+    return result.matches
+
+
+def _deterministic_match(job: JobRequirements, resume: ResumeProfile) -> _DeterministicMatch:
+    """Skill-матчинг (двухфазный) + жёсткие фильтры.
+
+    Фаза 1 — exact-string case-insensitive матч required_stack против навыков
+    резюме: дёшево и надёжно там, где формулировки буквально совпадают.
+    Фаза 2 (_semantic_skill_match) — то, что НЕ совпало в фазе 1, отдаётся
+    одним LLM-вызовом: строки вроде "Next.js" (вакансия) и "React"/"TypeScript"
+    (резюме) семантически пересекаются, но не совпадают как строки, и без
+    LLM-шага такие пункты навсегда оставались бы в missing_skills. Это
+    единственная не-детерминированная часть этой функции — hard-фильтры ниже
+    (seniority/remote/location/язык/work_authorization) остаются полностью
+    детерминированными: это факты, а не суждение, и семантического разрыва
+    у них нет (в отличие от вольной лексики required_stack).
     """
     resume_skill_names = {s.name.strip().lower() for s in resume.skills}
     required = [s.strip() for s in job.required_stack if s.strip()]
 
-    matched = [s for s in required if s.lower() in resume_skill_names]
-    missing = [s for s in required if s.lower() not in resume_skill_names]
+    exact_matched = [s for s in required if s.lower() in resume_skill_names]
+    exact_missing = [s for s in required if s.lower() not in resume_skill_names]
+
+    semantic_matches = _semantic_skill_match(exact_missing, resume)
+    semantic_by_key = {
+        m.required_item.strip().lower(): m
+        for m in semantic_matches
+        if m.covered and m.matched_skill_name
+    }
+
+    matched = list(exact_matched)
+    missing: list[str] = []
+    semantic_match_notes: list[str] = []
+
+    for item in exact_missing:
+        sem = semantic_by_key.get(item.strip().lower())
+        if sem is None:
+            missing.append(item)
+            continue
+        matched.append(item)
+        semantic_match_notes.append(
+            f'"{item}" покрыт через semantic match (не точное совпадение с резюме) '
+            f'навыком "{sem.matched_skill_name}": {sem.reason}'
+        )
+
     stack_score = len(matched) / len(required) if required else None
 
     hard_fail_reasons: list[str] = []
@@ -174,6 +299,7 @@ def _deterministic_match(job: JobRequirements, resume: ResumeProfile) -> _Determ
         missing_skills=missing,
         hard_fail_reasons=hard_fail_reasons,
         stack_score=stack_score,
+        semantic_match_notes=semantic_match_notes,
     )
 
 
@@ -192,6 +318,11 @@ _SCORE_SYSTEM_PROMPT = """Ты помогаешь оценить, насколь
 (seniority/remote/location/язык/work authorization — если этот список не пуст,
 речь идёт о доказанном несоответствии, а не предположении).
 
+Часть matched_skills могла быть покрыта не точным совпадением строк, а
+semantic match (см. semantic_match_notes) — например, вакансия просит
+"Next.js", а у кандидата есть "React"/"TypeScript". Это реальное, но более
+слабое покрытие, чем прямой опыт с самим инструментом.
+
 Твоя задача — поверх этих фактов:
 - учесть nice-to-have стек (плюс, но не обязательный),
 - учесть неявные сигналы из текста вакансии (culture fit, формулировки,
@@ -208,6 +339,19 @@ _SCORE_SYSTEM_PROMPT = """Ты помогаешь оценить, насколь
   линией: отклоняйся от неё только когда для этого есть явная причина
   (сильное покрытие nice-to-have, явные red flags в тексте и т.п.), и
   объясняй это отклонение в explanation.
+- Если semantic_match_notes не пуст — явно упомяни в explanation, что часть
+  покрытия стека основана на смежном опыте, а не на прямом использовании
+  требуемого инструмента. Не подавай semantic match как эквивалент прямого
+  опыта — это должно быть видно читателю explanation, а не скрыто.
+- НЕ штрафуй score за years_experience_total сам по себе. Оценка разрыва по
+  годам/уровню опыта — это зона ответственности hard_fail_reasons
+  (seniority gap уже проверяется детерминированно до тебя): если вакансия
+  явно требует определённый стаж/уровень и кандидат ему не соответствует,
+  это уже отражено в hard_fail_reasons, и штрафовать за это ещё раз в своей
+  оценке не нужно — это задвоение одного и того же сигнала. Если явного
+  требования к годам/уровню опыта в raw_text нет (а hard_fail_reasons по
+  seniority пуст) — years_experience_total вообще не повод понижать score;
+  оценивай fit по стеку и soft-сигналам, не оглядываясь на общий стаж.
 """
 
 
@@ -279,6 +423,8 @@ matched_skills: {det.matched_skills}
 missing_skills: {det.missing_skills}
 stack_score: {stack_score_pct}
 hard_fail_reasons: {det.hard_fail_reasons}
+semantic_match_notes (пункты matched_skills, покрытые смежным опытом, а не
+буквальным совпадением — см. правило про semantic match выше): {det.semantic_match_notes}
 """
 
     try:
